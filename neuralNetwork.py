@@ -6,103 +6,134 @@ Created on Fri Mar 15 20:41:56 2024
 
 Train Neural Translation Model
 """
+# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Mar 15 20:41:56 2024
 
-from pickle import load
-from numpy import array
-from keras.preprocessing.text import Tokenizer
-from keras.preprocessing.sequence import pad_sequences
-from keras.utils import to_categorical
-from keras.utils.vis_utils import plot_model
-from keras.models import Sequential
-from keras.layers import LSTM
-from keras.layers import Dense
-from keras.layers import Embedding
-from keras.layers import RepeatVector
-from keras.layers import TimeDistributed
-from keras.callbacks import ModelCheckpoint
+@author: ibsens
 
+Train Neural Translation Model
+"""
 
-# load the clean data set : )
+import torch
+import torch.nn as nn
+from pickle import load 
+from torchtext.data.utils import get_tokenizer
+import torchtext.transforms as T
+from torch.hub import load_state_dict_from_url
+
+padding_idx = 1
+bos_idx = 0
+eos_idx = 2
+max_seq_len = 256
+xlmr_vocab_path = r"https://download.pytorch.org/models/text/xlmr.vocab.pt"
+xlmr_spm_model_path = r"https://download.pytorch.org/models/text/xlmr.sentencepiece.bpe.model"
+
+text_transform = T.Sequential(
+    T.SentencePieceTokenizer(xlmr_spm_model_path),
+    T.VocabTransform(load_state_dict_from_url(xlmr_vocab_path)),
+    T.Truncate(max_seq_len - 2),
+    T.AddToken(token=bos_idx, begin=True),
+    T.AddToken(token=eos_idx, begin=False),
+)
+
+# load clean data set 
 def load_clean_sentences(filename):
     return load(open(filename, 'rb'))
+
 
 # load them data sets
 dataset = load_clean_sentences('english-magyar-both.pkl')
 train = load_clean_sentences('english-magyar-train.pkl')
 test = load_clean_sentences('english-magyar-test.pkl')
 
-# fit a tokenizer to map words to integers as needed for modeling
-def create_tokenizer(lines):
-    tokenizer = Tokenizer()
-    tokenizer.fit_on_texts(lines)
-    return tokenizer
-
-# max sentence length
-def max_length(lines):
-    return max(len(line.split()) for line in lines)
-
-# prepare english tokenizer
-eng_tokenizer = create_tokenizer(dataset[:, 0])
-eng_vocab_size = len(eng_tokenizer.word_index) + 1
-eng_length = max_length(dataset[:, 0])
-print('English Vocav Size: %d' % eng_vocab_size)
-print('English Max Length : %d' % (eng_length))
-
-# prepare magyar token
-magyar_tokenizer = create_tokenizer(dataset[:,1])
-magyar_voca_size = len(magyar_tokenizer.word_index) + 1
-magyar_length = max_length(dataset[:, 1])
-print('Magyar Vocabular Size: %d' % magyar_voca_size)
-print('Magyar Max Length: %d' % (magyar_length))
-
-# encode and pad sequences 
-def encode_sequences(tokenizer, length, lines):
-    # integer encode sequences
-    X = tokenizer.texts_to_sequences(lines)
-    # pad seq with 0 values
-    X = pad_sequences(X, maxlen = length, padding = 'post')
-    return X
-
-# one hot encode target sequence
-def encode_output(sequences, vocab_size):
-    ylist = list()
-    for sequence in sequences:
-        encoded = to_categorical(sequence, num_classes = vocab_size)
-        ylist.append(encoded)
-        y = array(list)
-        y = y.reshape(sequences.shape[0], sequences.shape[1], vocab_size)
-        return y
-
-# prepare training data
-trainX = encode_sequences(magyar_tokenizer, magyar_length, train[:,1])
-trainY = encode_sequences(eng_tokenizer, eng_length, train[:,0])
-trainY = encode_output(trainY, eng_vocab_size)
-
-#prepare validation data
-testX = encode_sequences(magyar_tokenizer, magyar_length, test[:, 1])
-testY = encode_sequences(eng_tokenizer, eng_length, test[:,0])
-testY = encode_output(testY, eng_vocab_size)
+print(dataset[0][0])
+# tokenize data first 
+# TODO: tokenize
+def tokenize_dataset(dataset, text_transform):
+    tokenized_data = []
+    for item in dataset:
+        if len(item) < 2:
+            print(f"Not enough data to unpack for item: {item}")
+            continue
+        if len(item) > 2:
+            print(f"Extra data in item, handling separately: {item[2]}")
+        english, magyar = item[:2]
+        tokenized_english = text_transform(english)
+        tokenized_magyar = text_transform(magyar)
+        tokenized_data.append((tokenized_english, tokenized_magyar))
+    return tokenized_data
 
 
-# define NMT model
-def define_model(src_vocab, tar_vocab, src_timestamps, tar_timesteps, n_units):
-    model = Sequential()
-    model.add(Embedding(src_vocab, n_units, input_length = src_timestamps, mask_zero = True))
-    model.add(LSTM(n_units))
-    model.add(RepeatVector(tar_timesteps))
-    model.add(LSTM(n_units, return_sequences = True))
-    model.add(TimeDistributed(Dense(tar_vocab, activation = 'softmax')))
-    return model
+# tokenize all datasets
+tokenized_dataset = tokenize_dataset(dataset, text_transform)
+tokenized_train = tokenize_dataset(train, text_transform)
+tokenized_test = tokenize_dataset(test, text_transform)
 
-# define model
-model = define_model(magyar_voca_size, eng_vocab_size, magyar_length, eng_length, 256)
-model.compile(optimizer = 'adam', loss = 'categorical_crossentropy')
-# summarize defined model
-print(model.summary())
-plot_model(model, to_file='model.png', show_shapes = True)
 
-# training the model with 30 epochs and a batch size of 64 examples
-# fit model
-filename = 'model.h5'
-checkpoint = ModelCheckpoint(filename, monitor = 'val_loss', verbose = 1, save_best_only = True, mode = 'min')
-model.fit(trainX, trainY, epochs = 30, batch_size = 64, validation_data = (testX, testY), callbacks = [checkpoint], verbose = 2)
+#tokenizer = get_tokenizer("basic_english")
+#TODO: loop through whole data set 
+
+print(tokenized_dataset[0]) 
+
+
+
+class NeuralNetwork(nn.Module):
+    def __init__(self):
+        super().__init__()
+        #self.flatten = nn.Flatten()
+        self.linear_relu_stack = nn.Sequential(
+            nn.Linear(5, 64), # token is the tokenization size of the input sentence, and ization is the expected output size
+            #non linearities
+            nn.ReLU(),
+            nn.Linear(64,128),     # expects an input 
+            nn.ReLU(),
+            nn.Linear(128,5),            #and the output
+            )
+        
+    def forward(self, x):
+       # x = self.flatten(x)
+        logits = self.linear_relu_stack(x)
+        return logits
+    
+#TODO: set up a simple training / test eval to understand how it works   
+model = NeuralNetwork().to("cpu")
+print(model)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+loss_fn = nn.CrossEntropyLoss()
+
+
+
+def train_one_epoch(model, training_loader, loss_fn, optimizer, device="cpu"):
+    model.train()  # Set the model to training mode
+    total_loss = 0
+
+    for inputs, labels in training_loader:
+        inputs, labels = inputs.to(device), labels.to(device)
+
+        # Zero the gradients
+        optimizer.zero_grad()
+
+        # Forward pass
+        outputs = model(inputs)
+
+        # Compute loss
+        loss = loss_fn(outputs, labels)
+
+        # Backward pass
+        loss.backward()
+
+        # Update model parameters
+        optimizer.step()
+
+        total_loss += loss.item()
+
+    average_loss = total_loss / len(training_loader)
+    print(f"Average loss: {average_loss:.4f}")
+    return average_loss
+
+
+
+
+
